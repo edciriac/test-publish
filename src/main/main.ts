@@ -182,7 +182,12 @@ async function handleFileOpen(sender: WebContents, isDirectory: boolean) {
 function killAllProcessess(processes: number[], containerName?: string) {
   if (containerName) exec(`sudo docker kill ${containerName}`);
   processes.forEach((childPID: number) => {
-    process.kill(childPID, 'SIGKILL');
+    console.log(processes);
+    try {
+      process.kill(childPID, 'SIGKILL');
+    } catch (error) {
+      console.log(error);
+    }
   });
   // For some reason above doesn't stop the docker process on windows, so run docker command to stop the container
   if (process.platform === 'win32' && containerName)
@@ -233,21 +238,23 @@ function validateSudoUser() {
   });
 }
 
-async function getURL(containerName: string) {
+async function getURL(containerName: string, port: string) {
   // Has more props, but these are used here
-  let urlPropsJSON: { port: string; token: string } = {
-    port: '',
+  let urlPropsJSON: { token: string } = {
     token: '',
   };
   // Execute a command that gets the parameters of the jupyter lab instance
   const out = execSync(
     `sudo docker exec ${containerName} jupyter lab list --json`,
   );
+  console.log(`out: sudo docker exec ${containerName} jupyter lab list --json`);
   console.log(`out: ${out}`);
   try {
     urlPropsJSON = JSON.parse(out.toString());
     console.log(urlPropsJSON);
-    const url = `http://localhost:${urlPropsJSON.port}/lab?token=${urlPropsJSON.token}`;
+    console.log('port');
+    console.log(port);
+    const url = `http://localhost:${port}/lab?token=${urlPropsJSON.token}`;
     console.log(url);
     return url;
   } catch (error) {
@@ -256,53 +263,50 @@ async function getURL(containerName: string) {
   }
 }
 
-async function dockerStart(containerName: string) {
+async function dockerStart(containerName: string, port: string) {
   const cmdStartContainer = `docker start ${containerName} -a`;
-  const containerProcess = formatCommand(cmdStartContainer);
-  console.log(containerProcess);
-  const container = spawn(containerProcess[0], containerProcess[1]);
-  const url = await getURL(containerName);
-  mainWindow?.webContents.send('lab-url', url);
-  mainWindow?.webContents.send('cli-output', `Environment running on: ${url}`);
-  container.stderr.on('data', (data) => {
-    mainWindow?.webContents.send('cli-output', data.toString());
+  const containerCommand = formatCommand(cmdStartContainer);
+  console.log(containerCommand);
+  const containerProcess = spawn(containerCommand[0], containerCommand[1]);
+  if (containerProcess.pid) {
+    allChildProcessess.push(containerProcess.pid); // Add child process to list of all child processes for killing when exiting app
+  }
+  containerProcess.stderr.on('data', async (data) => {
+    mainWindow?.webContents.send(
+      'cli-output',
+      `DOCKER START: ${data.toString()}`,
+    );
   });
-  container.on('exit', (code) => {
+  containerProcess.on('exit', (code) => {
     mainWindow?.webContents.send('cli-output', `Exited with code: ${code}`);
   });
 }
 
-async function dockerRun(mainCommand: string, args: string[]) {
+async function dockerRun(
+  mainCommand: string,
+  args: string[],
+  containerName: string,
+  port: string,
+) {
   const dockerProcess = spawn(mainCommand, args);
   if (dockerProcess.pid) {
     allChildProcessess.push(dockerProcess.pid); // Add child process to list of all child processes for killing when exiting app
   }
   // Handle stdio
   // For some reason output from docker goes to stderr instead of stdout.
-  dockerProcess.stdout?.on('data', (data: Buffer) => {
+  dockerProcess.stderr?.on('data', async (msg: Buffer) => {
     mainWindow?.webContents.send(
       'cli-output',
-      `OUTPUT DATA CP: ${data.toString()}`,
+      `OUTPUT FROM DOCKERpROCESS: ${msg.toString()}`,
     );
-    return `${data.toString()}data`;
-  });
-  dockerProcess.stderr?.on('data', (msg: Buffer) => {
-    if (msg.toString().includes('password')) {
-      // Send message to renderer to include a password input
-      mainWindow?.webContents.send('ask-pass', true);
-      // Pass the returning password from renderer to the child process
-      ipcMain.on('pass', (_event2, pwd = '') => {
-        dockerProcess.stdin?.write(`${pwd}\n`);
-        // eslint-disable-next-line prefer-destructuring
-        dockerProcess.stdin.end();
-        console.log('ended on if');
-      });
-    } else if (msg.toString().includes('To access the server')) {
-      // eslint-disable-next-line prefer-destructuring
-      dockerProcess.stdin.end();
-      console.log('ended on else');
+    if (msg.toString().includes('To access the server')) {
+      const url = await getURL(containerName, port);
+      mainWindow?.webContents.send('lab-url', url);
+      mainWindow?.webContents.send(
+        'cli-output',
+        `Environment running on: ${url}`,
+      );
     }
-    mainWindow?.webContents.send('cli-output', `${msg.toString()}`);
     return `${msg.toString()}err`;
   });
   dockerProcess.on('exit', (code) => {
@@ -316,7 +320,7 @@ async function dockerRun(mainCommand: string, args: string[]) {
   });
 }
 
-ipcMain.handle('runCommand', async (_event, givenCommand) => {
+ipcMain.handle('runCommand', async (_event, givenCommand, port) => {
   // Validate sudo user's credentials
   validateSudoUser();
   // console.log(sudoUser);
@@ -340,53 +344,47 @@ ipcMain.handle('runCommand', async (_event, givenCommand) => {
       mainWindow?.webContents.send('image-exists', true);
       // console.log(`container name: ${containerName}`);
       // Check if container exists
-      exec(`sudo docker container ls -a --format "{{.Names}}"`, (_err, out) => {
-        console.log(out);
-        if (out.includes(containerName)) {
-          console.log('ICLUDES THE CONTAINER');
-          // Is the container running?
-          exec(
-            `sudo docker container ls --format "{{.Names}}"`,
-            async (errLS, stdoutLS, stderrLS) => {
-              if (stdoutLS.includes(containerName)) {
-                console.log('IS RUNNING');
-                console.log(errLS);
-                console.log(stderrLS);
-                mainWindow?.webContents.send(
-                  'cli-output',
-                  `An environment already exists.
-
-                 Getting environment URL...`,
-                );
-                const url = await getURL(containerName);
-                mainWindow?.webContents.send('lab-url', url);
-                mainWindow?.webContents.send(
-                  'cli-output',
-                  `Environment running on: ${url}`,
-                );
-              } else {
-                console.log('IS NOT RUNNING');
-                dockerStart(containerName);
-              }
-            },
-          );
-        } else {
-          console.log('DOES NOT INCLUDE THE CONTAINER');
-          dockerRun(mainCommand, args);
-          // // Listen to stdin close event to send the image-exists information to renderer
-          // dockerProcess.stdin.on('close', () => {
-          //   console.log(dockerProcess.stdin.closed);
-          //   console.log('stdin closed');
-          //   // Check if image exists and send this information to renderer
-          //   // The command returns the repository names of images as a string.
-          // });
-        }
-      });
+      exec(
+        `sudo docker container ls -a --format "{{.Names}}"`,
+        (_err, containers) => {
+          console.log(containers);
+          if (containers.includes(containerName)) {
+            console.log('ICLUDES THE CONTAINER');
+            // Is the container running?
+            exec(
+              `sudo docker container ls --format "{{.Names}}"`,
+              async (errorMsg, runningContainers, stderrMsg) => {
+                if (runningContainers.includes(containerName)) {
+                  console.log('IS RUNNING');
+                  console.log(errorMsg);
+                  console.log(stderrMsg);
+                  mainWindow?.webContents.send(
+                    'cli-output',
+                    `An environment already exists. Getting environment URL...`,
+                  );
+                  const url = await getURL(containerName, port);
+                  mainWindow?.webContents.send('lab-url', url);
+                  mainWindow?.webContents.send(
+                    'cli-output',
+                    `Environment running on: ${url}`,
+                  );
+                } else {
+                  console.log('IS NOT RUNNING');
+                  // TODO: Remove old container and then run below:
+                  dockerRun(mainCommand, args, containerName, port);
+                }
+              },
+            );
+          } else {
+            console.log('DOES NOT INCLUDE THE CONTAINER');
+            dockerRun(mainCommand, args, containerName, port);
+          }
+        },
+      );
     } else {
       console.log('DOES NOT INCLUDE THE IMAGE');
       mainWindow?.webContents.send('image-exists', false);
-      await dockerRun(mainCommand, args);
-      // mainWindow?.webContents.send('image-exists', true);
+      dockerRun(mainCommand, args, containerName, port);
     }
   });
 });

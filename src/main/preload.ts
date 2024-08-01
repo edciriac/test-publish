@@ -29,8 +29,8 @@ const electronAPI = {
    * @param command the command to run
    * @returns the output of the command
    */
-  runCommand: (command: string | null) => {
-    return ipcRenderer.invoke('runCommand', command);
+  runCommand: (command: string | null, port: string) => {
+    return ipcRenderer.invoke('runCommand', command, port);
   },
   /**
    * Kill the child process of the environment (docker container) and return the exit message.
