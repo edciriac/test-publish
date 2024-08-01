@@ -370,7 +370,7 @@ ipcMain.handle('runCommand', async (_event, givenCommand, port) => {
                   );
                 } else {
                   console.log('IS NOT RUNNING');
-                  // TODO: Remove old container and then run below:
+                  exec(`sudo docker container rm ${containerName}`);
                   dockerRun(mainCommand, args, containerName, port);
                 }
               },
