@@ -155,6 +155,9 @@
   "build": {
     "productName": "Qubernetes Studio",
     "asar": true,
+    "nsis": {
+    "oneClick": false
+  }, 
     "asarUnpack": "**\\*.{node,dll}",
     "files": [
       "dist",
@@ -197,7 +200,7 @@
     },
     "linux": {
       "target": [
-        "AppImage"
+        "AppImage", "deb"
       ],
       "category": "Development"
     },
