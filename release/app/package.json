@@ -5,7 +5,7 @@
   "license": "MIT",
   "author": {
     "name": "Q8s-studios Maintainers",
-    "email": "edciriac@jyu.fi",
+    "email": "edciriac@jyu.fi"
   },
   "main": "./dist/main/main.js",
   "scripts": {
