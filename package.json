@@ -210,7 +210,8 @@
       "./assets/**"
     ],
     "publish": {
-      "provider": "github"
+      "provider": "github",
+      "releaseType": "release"
     }
   },
   "devEngines": {
